@@ -21,6 +21,7 @@ class ControllerOTA {
     void init(NimBLEClient *client, const ctr_progress_callback_t &progress_callback);
 
     void update(WiFiClientSecure &wifi_client, const String &release_url);
+    void updateFromFile(const String &filePath);
 
   private:
     bool downloadFile(WiFiClientSecure &wifi_client, const String &release_url);

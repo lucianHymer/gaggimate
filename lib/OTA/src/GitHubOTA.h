@@ -30,6 +30,7 @@ class GitHubOTA {
     bool isUpdateAvailable(bool controller = false) const;
     String getCurrentVersion() const;
     void update(bool controller = true, bool display = true);
+    void updateFromFile(const String &displayFwPath = "", const String &displayFsPath = "", const String &controllerPath = "");
     void setReleaseUrl(const String &release_url);
     void setControllerVersion(const String &controller_version);
 
@@ -38,6 +39,8 @@ class GitHubOTA {
 
     HTTPUpdateResult update_filesystem(const String &url);
     HTTPUpdateResult update_firmware(const String &url);
+    bool update_firmware_from_file(const String &path);
+    bool update_filesystem_from_file(const String &path);
 
     uint8_t phase = PHASE_IDLE;
     semver_t _version;

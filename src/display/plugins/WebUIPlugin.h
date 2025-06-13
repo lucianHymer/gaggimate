@@ -19,6 +19,11 @@ constexpr size_t DNS_PERIOD = 10;
 const String LOCAL_URL = "http://4.4.4.1/";
 const String RELEASE_URL = "https://github.com/jniebuhr/gaggimate/releases/";
 
+// OTA upload temporary file paths
+constexpr const char* TMP_DISPLAY_FW_PATH = "/tmp_display.bin";
+constexpr const char* TMP_DISPLAY_FS_PATH = "/tmp_filesystem.bin";
+constexpr const char* TMP_CONTROLLER_FW_PATH = "/tmp_controller.bin";
+
 class WebUIPlugin : public Plugin {
   public:
     WebUIPlugin();
@@ -36,6 +41,7 @@ class WebUIPlugin : public Plugin {
     void handleBLEScaleScan(AsyncWebServerRequest *request);
     void handleBLEScaleConnect(AsyncWebServerRequest *request);
     void handleBLEScaleInfo(AsyncWebServerRequest *request);
+    void handleOTAUpload(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final, const String& type);
     void updateOTAStatus(const String &version);
     void updateOTAProgress(uint8_t phase, int progress);
     void sendAutotuneResult();
@@ -53,6 +59,16 @@ class WebUIPlugin : public Plugin {
     long lastDns = 0;
     bool updating = false;
     String updateComponent = "";
+    
+    // File upload tracking
+    struct UploadState {
+        size_t totalSize = 0;
+        size_t currentSize = 0;
+        File file;
+        String type;
+        bool valid = true;
+    };
+    UploadState uploadState;
 };
 
 #endif // WEBUIPLUGIN_H

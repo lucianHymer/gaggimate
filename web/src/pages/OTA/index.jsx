@@ -83,6 +83,68 @@ export function OTA() {
     );
   }
 
+  const [uploadFiles, setUploadFiles] = useState({
+    display: null,
+    filesystem: null,
+    controller: null
+  });
+  const [uploadProgress, setUploadProgress] = useState({
+    display: 0,
+    filesystem: 0,
+    controller: 0
+  });
+  const [uploading, setUploading] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const handleFileSelect = useCallback((type, event) => {
+    const file = event.target.files[0];
+    setUploadFiles(prev => ({ ...prev, [type]: file }));
+  }, []);
+
+  const handleUpload = useCallback(async () => {
+    setUploading(true);
+    
+    for (const [type, file] of Object.entries(uploadFiles)) {
+      if (!file) continue;
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            const progress = Math.round((e.loaded / e.total) * 100);
+            setUploadProgress(prev => ({ ...prev, [type]: progress }));
+          }
+        });
+        
+        await new Promise((resolve, reject) => {
+          xhr.addEventListener('load', () => {
+            if (xhr.status === 200) {
+              resolve();
+            } else {
+              reject(new Error(`Upload failed: ${xhr.status}`));
+            }
+          });
+          xhr.addEventListener('error', reject);
+          
+          xhr.open('POST', `/api/ota/upload/${type}`);
+          xhr.send(formData);
+        });
+      } catch (error) {
+        console.error(`Failed to upload ${type}:`, error);
+        alert(`Failed to upload ${type} firmware`);
+        setUploading(false);
+        return;
+      }
+    }
+    
+    // Start installation after all uploads complete
+    apiService.send({ tp: 'req:ota-start', cp: 'local' });
+    setUploading(false);
+  }, [uploadFiles, apiService]);
+
   return (
     <form key="ota" method="post" action="/api/ota" ref={formRef} onSubmit={onSubmit} className="grid grid-cols-1 gap-2 sm:grid-cols-12 md:gap-2">
         <div className="sm:col-span-12">
@@ -126,6 +188,100 @@ export function OTA() {
             </div>
           </div>
         </div>
+        
+        <div className="col-span-12 mt-4">
+          <label className="flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showAdvanced}
+              onChange={(e) => setShowAdvanced(e.target.checked)}
+              className="mr-2 w-4 h-4"
+            />
+            <span className="font-medium text-gray-700 dark:text-gray-400">Show advanced options</span>
+          </label>
+        </div>
+        
+        {showAdvanced && (
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white col-span-12 dark:bg-gray-800 dark:border-gray-600 mt-4">
+            <div className="p-6">
+              <h3 className="text-xl font-bold mb-4">Local Firmware Upload</h3>
+              <div className="flex flex-col gap-4">
+              <div>
+                <label className="block font-medium text-gray-700 dark:text-gray-400 mb-2">
+                  Display Firmware (.bin)
+                </label>
+                <input
+                  type="file"
+                  accept=".bin"
+                  onChange={(e) => handleFileSelect('display', e)}
+                  className="input-field"
+                  disabled={uploading}
+                />
+                {uploadProgress.display > 0 && (
+                  <div className="mt-2 w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full"
+                      style={{ width: `${uploadProgress.display}%` }}
+                    ></div>
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                <label className="block font-medium text-gray-700 dark:text-gray-400 mb-2">
+                  Display Filesystem (.bin)
+                </label>
+                <input
+                  type="file"
+                  accept=".bin"
+                  onChange={(e) => handleFileSelect('filesystem', e)}
+                  className="input-field"
+                  disabled={uploading}
+                />
+                {uploadProgress.filesystem > 0 && (
+                  <div className="mt-2 w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full"
+                      style={{ width: `${uploadProgress.filesystem}%` }}
+                    ></div>
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                <label className="block font-medium text-gray-700 dark:text-gray-400 mb-2">
+                  Controller Firmware (.bin)
+                </label>
+                <input
+                  type="file"
+                  accept=".bin"
+                  onChange={(e) => handleFileSelect('controller', e)}
+                  className="input-field"
+                  disabled={uploading}
+                />
+                {uploadProgress.controller > 0 && (
+                  <div className="mt-2 w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full"
+                      style={{ width: `${uploadProgress.controller}%` }}
+                    ></div>
+                  </div>
+                )}
+              </div>
+              
+              <button
+                type="button"
+                className="menu-button"
+                onClick={handleUpload}
+                disabled={uploading || (!uploadFiles.display && !uploadFiles.filesystem && !uploadFiles.controller)}
+              >
+                {uploading ? 'Uploading...' : 'Upload & Install'}
+              </button>
+            </div>
+          </div>
+        </div>
+        )}
+        
         <div className="col-span-12 flex flex-row">
           <button type="submit" className="menu-button" disabled={submitting}>
             Save Preferences

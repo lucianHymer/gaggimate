@@ -6,6 +6,8 @@
 #include <HTTPUpdate.h>
 #include <Update.h>
 #include <WiFiClientSecure.h>
+#include <SPIFFS.h>
+#include <FS.h>
 
 GitHubOTA::GitHubOTA(const String &display_version, const String &controller_version, const String &release_url,
                      const phase_callback_t &phase_callback, const progress_callback_t &progress_callback,
@@ -138,4 +140,154 @@ HTTPUpdateResult GitHubOTA::update_filesystem(const String &url) {
 
 void GitHubOTA::setControllerVersion(const String &controller_version) {
     _controller_version = from_string(controller_version.substring(1).c_str());
+}
+
+void GitHubOTA::updateFromFile(const String &displayFwPath, const String &displayFsPath, const String &controllerPath) {
+    const char *TAG = "updateFromFile";
+    
+    // Update controller firmware if path provided
+    if (controllerPath != "" && SPIFFS.exists(controllerPath)) {
+        ESP_LOGI(TAG, "Updating controller from file: %s", controllerPath.c_str());
+        this->phase = PHASE_CONTROLLER_FW;
+        this->_phase_callback(PHASE_CONTROLLER_FW);
+        
+        // Use the existing controller OTA mechanism but with local file
+        _controller_ota.updateFromFile(controllerPath);
+        ESP_LOGI(TAG, "Controller update complete");
+    }
+    
+    // Update display firmware if path provided
+    if (displayFwPath != "" && SPIFFS.exists(displayFwPath)) {
+        ESP_LOGI(TAG, "Updating display firmware from file: %s", displayFwPath.c_str());
+        this->phase = PHASE_DISPLAY_FW;
+        this->_phase_callback(PHASE_DISPLAY_FW);
+        
+        if (!update_firmware_from_file(displayFwPath)) {
+            ESP_LOGE(TAG, "Display firmware update failed");
+            return;
+        }
+    }
+    
+    // Update display filesystem if path provided
+    if (displayFsPath != "" && SPIFFS.exists(displayFsPath)) {
+        ESP_LOGI(TAG, "Updating display filesystem from file: %s", displayFsPath.c_str());
+        this->phase = PHASE_DISPLAY_FS;
+        this->_phase_callback(PHASE_DISPLAY_FS);
+        
+        if (!update_filesystem_from_file(displayFsPath)) {
+            ESP_LOGE(TAG, "Display filesystem update failed");
+            return;
+        }
+    }
+    
+    // Clean up uploaded files
+    if (displayFwPath != "") SPIFFS.remove(displayFwPath);
+    if (displayFsPath != "") SPIFFS.remove(displayFsPath);
+    if (controllerPath != "") SPIFFS.remove(controllerPath);
+    
+    ESP_LOGI(TAG, "Update complete, restarting...");
+    this->phase = PHASE_FINISHED;
+    this->_phase_callback(PHASE_FINISHED);
+    delay(1000);
+    ESP.restart();
+}
+
+bool GitHubOTA::update_firmware_from_file(const String &path) {
+    const char *TAG = "update_firmware_from_file";
+    
+    File file = SPIFFS.open(path, FILE_READ);
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open firmware file: %s", path.c_str());
+        return false;
+    }
+    
+    size_t size = file.size();
+    ESP_LOGI(TAG, "Firmware size: %d bytes", size);
+    
+    if (!Update.begin(size, U_FLASH)) {
+        ESP_LOGE(TAG, "Failed to begin update: %s", Update.errorString());
+        file.close();
+        return false;
+    }
+    
+    // Read and write in chunks
+    const size_t bufferSize = 4096;
+    uint8_t buffer[bufferSize];
+    size_t written = 0;
+    
+    while (file.available()) {
+        size_t toRead = min(bufferSize, (size_t)file.available());
+        size_t read = file.read(buffer, toRead);
+        
+        if (Update.write(buffer, read) != read) {
+            ESP_LOGE(TAG, "Failed to write update data");
+            Update.abort();
+            file.close();
+            return false;
+        }
+        
+        written += read;
+        int progress = (written * 100) / size;
+        _progress_callback(phase, progress);
+    }
+    
+    file.close();
+    
+    if (!Update.end(true)) {
+        ESP_LOGE(TAG, "Update failed: %s", Update.errorString());
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Firmware update successful");
+    return true;
+}
+
+bool GitHubOTA::update_filesystem_from_file(const String &path) {
+    const char *TAG = "update_filesystem_from_file";
+    
+    File file = SPIFFS.open(path, FILE_READ);
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open filesystem file: %s", path.c_str());
+        return false;
+    }
+    
+    size_t size = file.size();
+    ESP_LOGI(TAG, "Filesystem size: %d bytes", size);
+    
+    if (!Update.begin(size, U_SPIFFS)) {
+        ESP_LOGE(TAG, "Failed to begin filesystem update: %s", Update.errorString());
+        file.close();
+        return false;
+    }
+    
+    // Read and write in chunks
+    const size_t bufferSize = 4096;
+    uint8_t buffer[bufferSize];
+    size_t written = 0;
+    
+    while (file.available()) {
+        size_t toRead = min(bufferSize, (size_t)file.available());
+        size_t read = file.read(buffer, toRead);
+        
+        if (Update.write(buffer, read) != read) {
+            ESP_LOGE(TAG, "Failed to write filesystem data");
+            Update.abort();
+            file.close();
+            return false;
+        }
+        
+        written += read;
+        int progress = (written * 100) / size;
+        _progress_callback(phase, progress);
+    }
+    
+    file.close();
+    
+    if (!Update.end(true)) {
+        ESP_LOGE(TAG, "Filesystem update failed: %s", Update.errorString());
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Filesystem update successful");
+    return true;
 }

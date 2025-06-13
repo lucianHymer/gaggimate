@@ -1,6 +1,7 @@
 #include "WebUIPlugin.h"
 #include <DNSServer.h>
 #include <SPIFFS.h>
+#include <FS.h>
 #include <display/core/Controller.h>
 
 #include "BLEScalePlugin.h"
@@ -36,7 +37,19 @@ void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) 
 void WebUIPlugin::loop() {
     if (updating) {
         pluginManager->trigger("ota:update:start");
-        ota->update(updateComponent != "display", updateComponent != "controller");
+        
+        if (updateComponent == "local") {
+            // Handle local file updates
+            String displayFwPath = SPIFFS.exists(TMP_DISPLAY_FW_PATH) ? TMP_DISPLAY_FW_PATH : "";
+            String displayFsPath = SPIFFS.exists(TMP_DISPLAY_FS_PATH) ? TMP_DISPLAY_FS_PATH : "";
+            String controllerPath = SPIFFS.exists(TMP_CONTROLLER_FW_PATH) ? TMP_CONTROLLER_FW_PATH : "";
+            
+            ota->updateFromFile(displayFwPath, displayFsPath, controllerPath);
+        } else {
+            // Handle GitHub updates
+            ota->update(updateComponent != "display", updateComponent != "controller");
+        }
+        
         pluginManager->trigger("ota:update:end");
         updating = false;
     }
@@ -99,6 +112,35 @@ void WebUIPlugin::start(bool apMode) {
     server.on("/api/scales/connect", [this](AsyncWebServerRequest *request) { handleBLEScaleConnect(request); });
     server.on("/api/scales/scan", [this](AsyncWebServerRequest *request) { handleBLEScaleScan(request); });
     server.on("/api/scales/info", [this](AsyncWebServerRequest *request) { handleBLEScaleInfo(request); });
+    
+    // OTA file upload endpoints
+    server.on("/api/ota/upload/display", HTTP_POST, 
+        [](AsyncWebServerRequest *request) { 
+            request->send(200, "application/json", "{\"success\":true}"); 
+        },
+        [this](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
+            handleOTAUpload(request, filename, index, data, len, final, "display");
+        }
+    );
+    
+    server.on("/api/ota/upload/filesystem", HTTP_POST,
+        [](AsyncWebServerRequest *request) { 
+            request->send(200, "application/json", "{\"success\":true}"); 
+        },
+        [this](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
+            handleOTAUpload(request, filename, index, data, len, final, "filesystem");
+        }
+    );
+    
+    server.on("/api/ota/upload/controller", HTTP_POST,
+        [](AsyncWebServerRequest *request) { 
+            request->send(200, "application/json", "{\"success\":true}"); 
+        },
+        [this](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final) {
+            handleOTAUpload(request, filename, index, data, len, final, "controller");
+        }
+    );
+    
     server.on("/ota", [](AsyncWebServerRequest *request) { request->send(SPIFFS, "/index.html"); });
     server.on("/settings", [](AsyncWebServerRequest *request) { request->send(SPIFFS, "/index.html"); });
     server.on("/scales", [](AsyncWebServerRequest *request) { request->send(SPIFFS, "/index.html"); });
@@ -356,4 +398,90 @@ void WebUIPlugin::sendAutotuneResult() {
     doc["pid"] = controller->getSettings().getPid();
     String message = doc.as<String>();
     ws.textAll(message);
+}
+
+void WebUIPlugin::handleOTAUpload(AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final, const String& type) {
+    if (index == 0) {
+        // Start of upload
+        uploadState.type = type;
+        uploadState.totalSize = request->contentLength();
+        uploadState.currentSize = 0;
+        uploadState.valid = true;
+        
+        // Create file path based on type
+        String filepath;
+        if (type == "display") {
+            filepath = TMP_DISPLAY_FW_PATH;
+        } else if (type == "filesystem") {
+            filepath = TMP_DISPLAY_FS_PATH;
+        } else if (type == "controller") {
+            filepath = TMP_CONTROLLER_FW_PATH;
+        } else {
+            uploadState.valid = false;
+            return;
+        }
+        
+        // Open file for writing
+        uploadState.file = SPIFFS.open(filepath, FILE_WRITE);
+        if (!uploadState.file) {
+            ESP_LOGE("WebUIPlugin", "Failed to open file for upload: %s", filepath.c_str());
+            uploadState.valid = false;
+            return;
+        }
+        
+        ESP_LOGI("WebUIPlugin", "Starting upload for %s firmware, size: %d", type.c_str(), uploadState.totalSize);
+    }
+    
+    if (!uploadState.valid) {
+        return;
+    }
+    
+    // Write data
+    if (len) {
+        size_t written = uploadState.file.write(data, len);
+        if (written != len) {
+            ESP_LOGE("WebUIPlugin", "Failed to write upload data");
+            uploadState.valid = false;
+            uploadState.file.close();
+            return;
+        }
+        uploadState.currentSize += written;
+        
+        // Send progress update
+        int progress = (uploadState.currentSize * 100) / uploadState.totalSize;
+        JsonDocument doc;
+        doc["tp"] = "evt:upload-progress";
+        doc["type"] = type;
+        doc["progress"] = progress;
+        ws.textAll(doc.as<String>());
+    }
+    
+    if (final) {
+        // Upload complete
+        uploadState.file.close();
+        ESP_LOGI("WebUIPlugin", "Upload complete for %s, size: %d", type.c_str(), uploadState.currentSize);
+        
+        // Validate firmware if it's not filesystem
+        if (type != "filesystem") {
+            String filepath;
+            if (type == "display") {
+                filepath = TMP_DISPLAY_FW_PATH;
+            } else if (type == "controller") {
+                filepath = TMP_CONTROLLER_FW_PATH;
+            }
+            
+            File file = SPIFFS.open(filepath, FILE_READ);
+            if (file) {
+                uint8_t magic;
+                file.read(&magic, 1);
+                file.close();
+                
+                if (magic != 0xE9) {
+                    printf("Invalid firmware magic byte: 0x%02X\n", magic);
+                    SPIFFS.remove(filepath);
+                    uploadState.valid = false;
+                }
+            }
+        }
+    }
 }

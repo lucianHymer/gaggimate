@@ -218,3 +218,26 @@ void ControllerOTA::onReceive(NimBLERemoteCharacteristic *pRemoteCharacteristic,
         break;
     }
 }
+
+void ControllerOTA::updateFromFile(const String &filePath) {
+    ESP_LOGI("ControllerOTA", "Starting controller update from file: %s", filePath.c_str());
+    
+    File file = SPIFFS.open(filePath, FILE_READ);
+    if (!file) {
+        ESP_LOGE("ControllerOTA", "Failed to open file: %s", filePath.c_str());
+        return;
+    }
+    
+    // Validate magic header
+    uint8_t magic;
+    file.read(&magic, 1);
+    if (magic != 0xE9) {
+        ESP_LOGE("ControllerOTA", "Invalid controller firmware magic: 0x%02X", magic);
+        file.close();
+        return;
+    }
+    file.seek(0); // Reset to beginning
+    
+    runUpdate(file, file.size());
+    file.close();
+}
