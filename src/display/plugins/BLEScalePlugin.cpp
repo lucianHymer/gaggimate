@@ -114,12 +114,17 @@ void BLEScalePlugin::onProcessStart() const {
 void BLEScalePlugin::establishConnection() {
     ESP_LOGI("BLEScalePlugin", "Connecting to %s", uuid.c_str());
     scanner->stopAsyncScan();
+    
+    bool deviceFound = false;
     for (const auto &d : scanner->getDiscoveredScales()) {
         if (d.getAddress().toString() == uuid) {
+            deviceFound = true;
             reconnectionTries = 0;
             scale = RemoteScalesFactory::getInstance()->create(d);
             if (!scale) {
                 ESP_LOGE("BLEScalePlugin", "Connection to device %s failed\n", d.getName().c_str());
+                doConnect = false;
+                this->scanner->initializeAsyncScan();
                 return;
             }
 
@@ -130,9 +135,17 @@ void BLEScalePlugin::establishConnection() {
             if (!scale->connect()) {
                 disconnect();
                 this->scanner->initializeAsyncScan();
+            } else {
+                doConnect = false;
             }
             break;
         }
+    }
+    
+    if (!deviceFound) {
+        ESP_LOGE("BLEScalePlugin", "Device %s not found in discovered scales", uuid.c_str());
+        doConnect = false;
+        this->scanner->initializeAsyncScan();
     }
 }
 
